@@ -341,8 +341,8 @@ void setupDisplay() {
         /*BUSY*/ ePaper_Busy);
 
     dispPort->begin();
-    display->init(/*115200*/);
-    display->setRotation(2);
+    display->init();
+    display->setRotation(3); // Rotated 90 degrees to the right
     display->fillScreen(GxEPD_WHITE);
     display->setTextColor(GxEPD_BLACK);
 }
