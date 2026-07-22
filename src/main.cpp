@@ -18,6 +18,9 @@
 #include <GxIO/GxIO_SPI/GxIO_SPI.h>
 #include <GxIO/GxIO.h>
 
+#include <Adafruit_LittleFS.h>
+#include <InternalFileSystem.h>
+
 #include "t_echo_pins.h"
 
 // --- Display objects (matching official example pattern) ---
@@ -34,6 +37,75 @@ uint8_t currentPage = 0;
 bool bmePresent = false;
 unsigned long lastUpdate = 0;
 const unsigned long UPDATE_INTERVAL_MS = 30000;
+
+// --- Logging ---
+using namespace Adafruit_LittleFS_Namespace;
+const char* LOG_FILENAME = "/metrics.csv";
+bool memoryFull = false;
+unsigned long lastLogTime = 0;
+const unsigned long LOG_INTERVAL_MS = 3600000; // 1 hour
+
+void logMetrics() {
+    if (memoryFull) return;
+
+    File file(InternalFS);
+    bool fileExists = file.open(LOG_FILENAME, FILE_O_READ);
+    if (fileExists) {
+        if (file.size() > 200000) { // Limit to ~200KB
+            memoryFull = true;
+            file.close();
+            return;
+        }
+        file.close();
+    }
+
+    if (file.open(LOG_FILENAME, FILE_O_WRITE)) {
+        if (!fileExists) {
+            file.write("Date,Time,Lat,Lon,Speed(kmh),Alt(m),Sats,Temp(C),Hum(%),Press(hPa)\n");
+        }
+
+        // Date/Time
+        char timeStr[32];
+        if (gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2000) {
+            sprintf(timeStr, "%04d/%02d/%02d,%02d:%02d:%02d",
+                    gps.date.year(), gps.date.month(), gps.date.day(),
+                    gps.time.hour(), gps.time.minute(), gps.time.second());
+        } else {
+            sprintf(timeStr, "NO_DATE,NO_TIME");
+        }
+
+        // GPS
+        char gpsStr[64];
+        if (gps.location.isValid()) {
+            sprintf(gpsStr, "%.5f,%.5f,%.1f,%.1f,%u",
+                    gps.location.lat(), gps.location.lng(),
+                    gps.speed.kmph(), gps.altitude.meters(), (unsigned int)gps.satellites.value());
+        } else {
+            sprintf(gpsStr, "NO_FIX,NO_FIX,N/A,N/A,0");
+        }
+
+        // BME
+        char bmeStr[32];
+        if (bmePresent) {
+            sprintf(bmeStr, "%.1f,%.1f,%.1f",
+                    bme.readTemperature(), bme.readHumidity(), bme.readPressure() / 100.0f);
+        } else {
+            sprintf(bmeStr, "N/A,N/A,N/A");
+        }
+
+        file.print(timeStr);
+        file.print(",");
+        file.print(gpsStr);
+        file.print(",");
+        file.print(bmeStr);
+        file.print("\n");
+        file.close();
+        
+        Serial.println("[LOG] Saved hourly metrics to internal flash.");
+    } else {
+        Serial.println("[LOG ERROR] Failed to open log file.");
+    }
+}
 
 // --- Battery ---
 float readBatteryVoltage() {
@@ -63,7 +135,11 @@ void drawWeatherPage() {
 
     // Header
     display->setCursor(2, 14);
-    display->print("T-ECHO");
+    if (memoryFull) {
+        display->print("MEM FULL");
+    } else {
+        display->print("T-ECHO");
+    }
     display->setCursor(130, 14);
     display->print(batPct);
     display->print("%");
@@ -140,7 +216,11 @@ void drawGPSPage() {
 
     // Header
     display->setCursor(2, 14);
-    display->print("T-ECHO");
+    if (memoryFull) {
+        display->print("MEM FULL");
+    } else {
+        display->print("T-ECHO");
+    }
     display->setCursor(130, 14);
     display->print(batPct);
     display->print("%");
@@ -239,7 +319,7 @@ void setupDisplay() {
 
 void setup() {
     Serial.begin(115200);
-    delay(200);
+    // Remove delay(200); we can just proceed
 
     // Power enable (official pattern)
     pinMode(Power_Enable_Pin, OUTPUT);
@@ -304,6 +384,10 @@ void setup() {
 
     Serial.println("[INIT] GPS initialized");
 
+    // Initialize File System
+    InternalFS.begin();
+    Serial.println("[INIT] InternalFS initialized");
+
     // Display init (using official pattern)
     setupDisplay();
     Serial.println("[INIT] Display initialized");
@@ -323,6 +407,31 @@ void loop() {
     if (millis() - lastBlink > 2000) {
         lastBlink = millis();
         digitalWrite(GreenLed_Pin, !digitalRead(GreenLed_Pin));
+    }
+
+    // Serial Commands (DUMP / CLEAR)
+    if (Serial.available() > 0) {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        cmd.toUpperCase();
+        if (cmd == "DUMP") {
+            File file(InternalFS);
+            if (file.open(LOG_FILENAME, FILE_O_READ)) {
+                Serial.println("=== LOG DUMP START ===");
+                while (file.available()) {
+                    Serial.write(file.read());
+                }
+                Serial.println("\n=== LOG DUMP END ===");
+                file.close();
+            } else {
+                Serial.println("No log file found.");
+            }
+        } else if (cmd == "CLEAR") {
+            InternalFS.remove(LOG_FILENAME);
+            memoryFull = false;
+            Serial.println("Log file cleared.");
+            updateDisplay(); // Remove MEM FULL message
+        }
     }
 
     // GPS
@@ -353,5 +462,14 @@ void loop() {
     if (millis() - lastUpdate >= UPDATE_INTERVAL_MS) {
         lastUpdate = millis();
         updateDisplay();
+    }
+
+    // Periodic Logging
+    if (millis() - lastLogTime >= LOG_INTERVAL_MS || lastLogTime == 0) {
+        // Wait until GPS has a fix or 5 minutes have passed to avoid recording blank time forever on boot
+        if (gps.time.isValid() || millis() > 300000 || lastLogTime != 0) {
+            lastLogTime = millis();
+            logMetrics();
+        }
     }
 }
