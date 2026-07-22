@@ -330,25 +330,22 @@ void loop() {
         gps.encode(Serial2.read());
     }
 
-    // Touch button (HIGH active per official docs)
-    if (digitalRead(Touch_Pin) == HIGH) {
-        delay(50);
-        if (digitalRead(Touch_Pin) == HIGH) {
-            Serial.println("[INPUT] Touch button pressed");
-            currentPage = (currentPage == 0) ? 1 : 0;
-            updateDisplay();
-            while (digitalRead(Touch_Pin) == HIGH);
-        }
-    }
-
-    // User button (LOW active per official docs)
+    // User button (physical button on the side) - LOW active
     if (digitalRead(UserButton_Pin) == LOW) {
-        delay(50);
+        delay(50); // debounce
         if (digitalRead(UserButton_Pin) == LOW) {
             Serial.println("[INPUT] User button pressed");
             currentPage = (currentPage == 0) ? 1 : 0;
             updateDisplay();
-            while (digitalRead(UserButton_Pin) == LOW);
+            
+            // Wait for release
+            while (digitalRead(UserButton_Pin) == LOW) {
+                // Keep processing GPS while waiting so we don't lose data
+                while (Serial2.available() > 0) {
+                    gps.encode(Serial2.read());
+                }
+                delay(10);
+            }
         }
     }
 
