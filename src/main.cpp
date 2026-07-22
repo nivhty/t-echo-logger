@@ -286,9 +286,39 @@ void drawGPSPage() {
     display->update();
 }
 
+void drawScreenSaver() {
+    display->fillScreen(GxEPD_WHITE);
+    display->setTextColor(GxEPD_BLACK);
+    display->setFont(&FreeMonoBold9pt7b);
+
+    // Terminal-style ASCII Logo
+    const char* art[] = {
+        "   _  _",
+        " _| || |_",
+        "|_  ..  _|",
+        "|_      _|",
+        "  |_||_|",
+        "",
+        " T-ECHO",
+        " LOGGER",
+        "",
+        " (SLEEP)"
+    };
+
+    int y = 40;
+    for (int i = 0; i < 10; i++) {
+        display->setCursor(40, y);
+        display->print(art[i]);
+        y += 18;
+    }
+    
+    display->update();
+}
+
 void updateDisplay() {
     if (currentPage == 0) drawWeatherPage();
-    else drawGPSPage();
+    else if (currentPage == 1) drawGPSPage();
+    else if (currentPage == 2) drawScreenSaver();
 }
 
 void setupDisplay() {
@@ -444,7 +474,7 @@ void loop() {
         delay(50); // debounce
         if (digitalRead(UserButton_Pin) == LOW) {
             Serial.println("[INPUT] User button pressed");
-            currentPage = (currentPage == 0) ? 1 : 0;
+            currentPage = (currentPage + 1) % 3;
             updateDisplay();
             
             // Wait for release
@@ -458,10 +488,12 @@ void loop() {
         }
     }
 
-    // Periodic refresh
-    if (millis() - lastUpdate >= UPDATE_INTERVAL_MS) {
-        lastUpdate = millis();
-        updateDisplay();
+    // Periodic refresh (skip if in screen saver mode to prevent screen flashing)
+    if (currentPage != 2) {
+        if (millis() - lastUpdate >= UPDATE_INTERVAL_MS) {
+            lastUpdate = millis();
+            updateDisplay();
+        }
     }
 
     // Periodic Logging
